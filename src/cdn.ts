@@ -2,8 +2,11 @@
  * CDN upload utilities for Weixin media files.
  * File → CDN upload (AES-128-ECB encrypted) → sendMessage sends CDN reference.
  */
-import { createCipheriv } from 'node:crypto'
+import { createCipheriv, createDecipheriv } from 'node:crypto'
+import axios from 'axios'
 import https from 'node:https'
+import http from 'node:http'
+import fs from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import crypto from 'node:crypto'
 
@@ -20,6 +23,12 @@ export function aesEcbPaddedSize(plaintextSize: number): number {
 export function encryptAesEcb(plaintext: Buffer, key: Buffer): Buffer {
   const cipher = createCipheriv('aes-128-ecb', key, null)
   return Buffer.concat([cipher.update(plaintext), cipher.final()])
+}
+
+/** Decrypt buffer with AES-128-ECB (PKCS7 padding removed). */
+export function decryptAesEcb(ciphertext: Buffer, key: Buffer): Buffer {
+  const decipher = createDecipheriv('aes-128-ecb', key, null)
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()])
 }
 
 export interface UploadedFileInfo {
@@ -171,4 +180,67 @@ export async function uploadMediaToCdn(params: {
     fileSize: rawsize,
     fileSizeCiphertext: filesize,
   }
+}
+
+/** Download media from CDN URL and decrypt with AES-128-ECB. */
+export async function downloadAndDecryptMedia(params: {
+  url: string
+  aesKey: string
+}): Promise<Buffer> {
+  const { url, aesKey } = params
+  // aes_key is base64 encoded hex string, decode to get actual 16-byte key
+  const keyBuffer = Buffer.from(aesKey, 'base64')
+  const hexString = keyBuffer.toString('ascii')
+  const actualKey = Buffer.from(hexString, 'hex')
+
+  const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 120_000 })
+  const encrypted = Buffer.from(response.data)
+
+  const decipher = createDecipheriv('aes-128-ecb', actualKey, null)
+  decipher.setAutoPadding(true)
+  return Buffer.concat([decipher.update(encrypted), decipher.final()])
+}
+
+/**
+ * Download media from CDN URL, decrypt, and save to file.
+ * @param url - CDN media URL
+ * @param aesKey - AES key (auto-detect: hex or base64 encoded)
+ * @param destPath - Destination file path
+ */
+export async function downloadMediaToFile(url: string, aesKey: string, destPath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const protocol = url.startsWith('https') ? https : http
+
+    protocol.get(url, (response) => {
+      const chunks: Buffer[] = []
+
+      response.on('data', (chunk: Buffer) => chunks.push(chunk))
+
+      response.on('end', () => {
+        try {
+          const encryptedData = Buffer.concat(chunks)
+
+          // aes_key is base64 encoded hex string
+          // base64 decode gives ASCII hex string "b5e9636ec6bfda9915947dd94d6ecc0e"
+          // hex decode that string to get actual 16-byte AES-128 key
+          const keyBuffer = Buffer.from(aesKey, 'base64')
+          const hexString = keyBuffer.toString('ascii')
+          const actualKey = Buffer.from(hexString, 'hex')
+
+          const decipher = createDecipheriv('aes-128-ecb', actualKey, null)
+          decipher.setAutoPadding(true)
+
+          let decrypted = decipher.update(encryptedData)
+          decrypted = Buffer.concat([decrypted, decipher.final()])
+
+          fs.writeFileSync(destPath, decrypted)
+          resolve(destPath)
+        } catch (error) {
+          reject(error)
+        }
+      })
+
+      response.on('error', reject)
+    }).on('error', reject)
+  })
 }

@@ -136,6 +136,59 @@ await bot.sendRefMessage(userId, '看这张图', {
 })
 ```
 
+### `downloadAndDecryptMedia(params)`
+
+从 CDN 下载媒体文件并解密。返回解密后的原始文件数据（Buffer）。
+
+- `url: string` CDN 媒体的 URL。
+- `aesKey: string` AES 密钥（hex 编码）。
+
+```typescript
+import { downloadAndDecryptMedia } from '@chnak/weixin-bot'
+
+// 从收到的图片消息中下载
+const buffer = await downloadAndDecryptMedia({
+  url: imageItem.url,
+  aesKey: Buffer.from(imageItem.media.aes_key, 'base64').toString('hex')
+})
+
+// 保存到文件
+import { writeFile } from 'node:fs/promises'
+await writeFile('image.png', buffer)
+
+// 或转为 base64
+const base64 = buffer.toString('base64')
+```
+
+### `decryptAesEcb(ciphertext, key)`
+
+使用 AES-128-ECB 解密数据（PKCS7 padding 会自动移除）。
+
+```typescript
+import { decryptAesEcb } from '@chnak/weixin-bot'
+
+const plaintext = decryptAesEcb(encryptedBuffer, key)
+```
+
+### `await downloadMediaToFile(url, aesKey, destPath)`
+
+下载 CDN 媒体文件并解密，直接保存到指定路径。
+
+- `url` - CDN 媒体 URL
+- `aesKey` - AES key（base64 编码）
+- `destPath` - 保存路径
+
+```typescript
+import { downloadMediaToFile } from '@chnak/weixin-bot'
+
+// 从收到的图片消息下载并保存
+await downloadMediaToFile(
+  imageItem.url,
+  imageItem.media.aes_key,  // base64 编码
+  './downloads/image.png'
+)
+```
+
 ### `await bot.run()`
 
 启动长轮询循环，将收到的消息分发给已注册的处理程序，在临时故障时重连，并在会话过期时触发重新登录。
